@@ -42,10 +42,16 @@ export default async function handler(req, res) {
       url.searchParams.set('eventStartDate', eventStartDate);
       url.searchParams.set('arrange', 'A');
 
-      const response = await fetch(url.toString());
+      const response = await fetch(url.toString(), {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                        + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+      });
 
       if (!response.ok) {
-        throw new Error(`TourAPI HTTP ${response.status}`);
+        const bodyText = await response.text().catch(() => '');
+        throw new Error(`TourAPI HTTP ${response.status} | ${bodyText.slice(0, 200)}`);
       }
 
       const data = await response.json();
