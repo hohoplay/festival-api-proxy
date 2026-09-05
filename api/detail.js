@@ -4,6 +4,10 @@
 const BASE_URL = 'https://apis.data.go.kr/B551011/KorService2/detailCommon2';
 
 export default async function handler(req, res) {
+  // festival/map.html이 브라우저에서(다른 도메인인 festival-api-proxy.vercel.app로) 직접
+  // 호출할 수 있도록 허용. (지역 선택 시 클라이언트에서 설명을 바로 받아오는 데 필요)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
   const apiKey = process.env.TOUR_API_KEY;
   if (!apiKey) {
     res.status(500).json({ error: 'TOUR_API_KEY 환경변수가 설정되지 않았습니다.' });
