@@ -25,6 +25,11 @@ export default async function handler(req, res) {
   url.searchParams.set('_type', 'json');
   url.searchParams.set('defaultYN', 'Y');
   url.searchParams.set('overviewYN', 'Y');
+  url.searchParams.set('firstImageYN', 'N');
+  url.searchParams.set('areacodeYN', 'N');
+  url.searchParams.set('catcodeYN', 'N');
+  url.searchParams.set('addrinfoYN', 'N');
+  url.searchParams.set('mapinfoYN', 'N');
 
   try {
     const response = await fetch(url.toString(), {
@@ -54,6 +59,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ overview: item?.overview || '' });
   } catch (err) {
+    console.error('detail.js 오류:', err && err.message ? err.message : err);
     res.status(502).json({ error: String(err && err.message ? err.message : err) });
   }
 }
