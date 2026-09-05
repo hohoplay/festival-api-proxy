@@ -16,10 +16,14 @@ export default async function handler(req, res) {
     return;
   }
 
+  // 호출하는 쪽(fetch_data.py)이 searchFestival2 응답에서 실제로 받은 contenttypeid를
+  // 그대로 넘겨준다. 값이 없을 때만 15(행사/공연/축제)로 fallback.
+  const contentTypeId = req.query.contentTypeId || '15';
+
   const url = new URL(BASE_URL);
   url.searchParams.set('serviceKey', apiKey);
   url.searchParams.set('contentId', contentId);
-  url.searchParams.set('contentTypeId', '15'); // 15 = 행사/공연/축제
+  url.searchParams.set('contentTypeId', contentTypeId);
   url.searchParams.set('MobileOS', 'ETC');
   url.searchParams.set('MobileApp', 'hohoplay');
   url.searchParams.set('_type', 'json');
@@ -59,7 +63,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ overview: item?.overview || '' });
   } catch (err) {
-    console.error('detail.js 오류:', err && err.message ? err.message : err);
+    console.error(`detail.js 오류 (contentId=${contentId}, contentTypeId=${contentTypeId}):`, err && err.message ? err.message : err);
     res.status(502).json({ error: String(err && err.message ? err.message : err) });
   }
 }
