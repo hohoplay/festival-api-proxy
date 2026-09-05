@@ -16,24 +16,16 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 호출하는 쪽(fetch_data.py)이 searchFestival2 응답에서 실제로 받은 contenttypeid를
-  // 그대로 넘겨준다. 값이 없을 때만 15(행사/공연/축제)로 fallback.
-  const contentTypeId = req.query.contentTypeId || '15';
-
+  // TourAPI 4.0 Ver 4.3부터 detailCommon2 파라미터가 대폭 단순화되었다.
+  // contentTypeId, defaultYN/firstImageYN/areacodeYN/catcodeYN/addrinfoYN/mapinfoYN/overviewYN은
+  // 전부 폐기(removed)된 파라미터이며, 보내면 INVALID_REQUEST_PARAMETER_ERROR가 발생한다.
+  // 이제는 baseline(serviceKey, MobileOS, MobileApp, _type) + contentId만 필요하다.
   const url = new URL(BASE_URL);
   url.searchParams.set('serviceKey', apiKey);
-  url.searchParams.set('contentId', contentId);
-  url.searchParams.set('contentTypeId', contentTypeId);
   url.searchParams.set('MobileOS', 'ETC');
   url.searchParams.set('MobileApp', 'hohoplay');
   url.searchParams.set('_type', 'json');
-  url.searchParams.set('defaultYN', 'Y');
-  url.searchParams.set('overviewYN', 'Y');
-  url.searchParams.set('firstImageYN', 'N');
-  url.searchParams.set('areacodeYN', 'N');
-  url.searchParams.set('catcodeYN', 'N');
-  url.searchParams.set('addrinfoYN', 'N');
-  url.searchParams.set('mapinfoYN', 'N');
+  url.searchParams.set('contentId', contentId);
 
   try {
     const response = await fetch(url.toString(), {
@@ -63,7 +55,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ overview: item?.overview || '' });
   } catch (err) {
-    console.error(`detail.js 오류 (contentId=${contentId}, contentTypeId=${contentTypeId}):`, err && err.message ? err.message : err);
+    console.error(`detail.js 오류 (contentId=${contentId}):`, err && err.message ? err.message : err);
     res.status(502).json({ error: String(err && err.message ? err.message : err) });
   }
 }
