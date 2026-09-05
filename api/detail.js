@@ -19,6 +19,7 @@ export default async function handler(req, res) {
   const url = new URL(BASE_URL);
   url.searchParams.set('serviceKey', apiKey);
   url.searchParams.set('contentId', contentId);
+  url.searchParams.set('contentTypeId', '15'); // 15 = 행사/공연/축제
   url.searchParams.set('MobileOS', 'ETC');
   url.searchParams.set('MobileApp', 'hohoplay');
   url.searchParams.set('_type', 'json');
@@ -41,7 +42,7 @@ export default async function handler(req, res) {
     const data = await response.json();
     const header = data?.response?.header;
     if (!header || (header.resultCode !== '0000' && header.resultCode !== '00')) {
-      throw new Error(`TourAPI 오류 응답: ${header?.resultMsg || '알 수 없음'}`);
+      throw new Error(`TourAPI 오류 응답: ${header?.resultMsg || JSON.stringify(data).slice(0, 300)}`);
     }
 
     const body = data?.response?.body;
