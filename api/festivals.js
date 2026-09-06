@@ -11,6 +11,25 @@ function formatDate(d) {
   return `${y}${m}${day}`;
 }
 
+// [FIX] 페이지 하나를 가져오다 순간적으로 연결이 실패해도(네트워크 순단 등),
+// 전체를 처음부터 다시 시도하지 않고 그 페이지만 짧게 재시도하도록 분리.
+// AbortSignal.timeout으로 "이 요청 하나"에 명시적 제한시간을 둬서, TourAPI가
+// 응답을 계속 안 주는 경우 무한정 매달리지 않고 빠르게 재시도로 넘어가게 한다.
+async function fetchWithRetry(url, options, maxRetries = 2) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetch(url, { ...options, signal: AbortSignal.timeout(12000) });
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export default async function handler(req, res) {
   const apiKey = process.env.TOUR_API_KEY;
   if (!apiKey) {
@@ -42,12 +61,12 @@ export default async function handler(req, res) {
       url.searchParams.set('eventStartDate', eventStartDate);
       url.searchParams.set('arrange', 'A');
 
-      const response = await fetch(url.toString(), {
+      const response = await fetchWithRetry(url.toString(), {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                         + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
         }
-      });
+      }, 2);
 
       if (!response.ok) {
         const bodyText = await response.text().catch(() => '');
@@ -77,9 +96,8 @@ export default async function handler(req, res) {
 
     res.status(200).json({ items: allItems, totalCount: allItems.length });
   } catch (err) {
-    // [FIX] fetch() 자체가 실패하면(네트워크 단계 실패) err.message는 "fetch failed"처럼
-    // 뭉뚱그려진 값만 담고 있고, 실제 원인(DNS 실패/타임아웃/연결거부 등)은 err.cause에
-    // 따로 들어있다. 기존 코드는 이 cause를 안 읽어서 진짜 원인을 알 수 없었다.
+    // fetch() 자체가 실패하면(네트워크 단계 실패) err.message는 "fetch failed"처럼
+    // 뭉뚱그려진 값만 담고 있고, 실제 원인(연결시간초과 등)은 err.cause에 따로 들어있다.
     const causeDetail = err && err.cause
       ? ` | cause: ${err.cause.code || err.cause.message || String(err.cause)}`
       : '';
