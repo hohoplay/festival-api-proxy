@@ -63,12 +63,10 @@ export default async function handler(req, res) {
       const body = data?.response?.body;
       const totalCount = Number(body?.totalCount || 0);
       const items = body?.items;
-
       let itemList = [];
       if (items && items !== '') {
         itemList = Array.isArray(items.item) ? items.item : (items.item ? [items.item] : []);
       }
-
       allItems.push(...itemList);
 
       if (pageNo * numOfRows >= totalCount || itemList.length === 0) {
@@ -79,6 +77,14 @@ export default async function handler(req, res) {
 
     res.status(200).json({ items: allItems, totalCount: allItems.length });
   } catch (err) {
-    res.status(502).json({ error: String(err && err.message ? err.message : err) });
+    // [FIX] fetch() 자체가 실패하면(네트워크 단계 실패) err.message는 "fetch failed"처럼
+    // 뭉뚱그려진 값만 담고 있고, 실제 원인(DNS 실패/타임아웃/연결거부 등)은 err.cause에
+    // 따로 들어있다. 기존 코드는 이 cause를 안 읽어서 진짜 원인을 알 수 없었다.
+    const causeDetail = err && err.cause
+      ? ` | cause: ${err.cause.code || err.cause.message || String(err.cause)}`
+      : '';
+    const message = String(err && err.message ? err.message : err) + causeDetail;
+    console.error('festivals.js 오류 (pageNo=' + pageNo + '):', message);
+    res.status(502).json({ error: message });
   }
 }
