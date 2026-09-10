@@ -4,9 +4,24 @@
 //
 // ?mode=nature 를 붙이면 축제(searchFestival2) 대신 자연관광지(areaBasedList2 +
 // 자연관광지 카테고리)를 조회한다 — 수목원·공원·자연휴양림 지도용으로 추가됨.
+//
+// ?mode=shelter 를 붙이면 TourAPI가 아니라 별도 기관(행정안전부 생활안전지도,
+// safemap.go.kr)의 무더위쉼터 API(IF_0001)를 호출한다. TOUR_API_KEY와는
+// 완전히 다른 별도 인증키(SAFEMAP_API_KEY)가 필요하다.
 
 const FESTIVAL_URL = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
 const AREA_LIST_URL = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+
+// safemap.go.kr(생활안전지도) 무더위쉼터 오픈API. 공식 샘플 코드가 http(80포트)로
+// 호출하고 있고 이 서버가 별도 인증서를 요구할 가능성이 있어 그대로 http를 따른다.
+const SHELTER_URL = 'http://safemap.go.kr/openapi2/IF_0001';
+// 무더위쉼터 API 응답(XML)에서 실제로 내려오는 항목 필드명 — safemap.go.kr
+// "오픈API Data" 상세페이지의 출력결과(Response Element) 표에서 확인한 값 그대로.
+const SHELTER_FIELDS = [
+  'num', 'buld_sn', 'cc_nm', 'cc_type', 'rn_adres', 'adres',
+  'tot_ar', 'use_num', 'hv_ef', 'hv_ac', 'rest_at', 'night_at',
+  'weekend_at', 'lodge_at', 'x', 'y'
+];
 
 function formatDate(d) {
   const y = d.getFullYear();
@@ -32,14 +47,122 @@ async function fetchWithRetry(url, options, maxRetries = 2) {
   throw lastErr;
 }
 
+// safemap.go.kr은 TourAPI와 달리 XML만 안정적으로 지원하는 것으로 보여(요청 파라미터
+// 문서상 JSON도 명시되어 있긴 하나, 실제 동작이 검증된 건 XML 샘플뿐이라 XML로 호출하고
+// 여기서 JSON으로 변환한다). Node 환경에 별도 XML 파서 패키지를 새로 추가하면 배포/빌드
+// 리스크가 늘어나므로, 필드가 평평(flat)하고 목록이 정해져 있는 이 API 특성에 맞춰
+// 가벼운 정규식 기반 추출로 처리한다.
+function decodeXmlEntities(str) {
+  return str
+    .replace(/<!\[CDATA\[/g, '')
+    .replace(/\]\]>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+    .trim();
+}
+
+function extractXmlTag(block, tag) {
+  const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const m = block.match(re);
+  return m ? decodeXmlEntities(m[1]) : '';
+}
+
+function parseShelterXmlItems(xmlText) {
+  const itemBlocks = xmlText.match(/<item[^>]*>[\s\S]*?<\/item>/gi) || [];
+  return itemBlocks.map((block) => {
+    const obj = {};
+    for (const field of SHELTER_FIELDS) {
+      obj[field] = extractXmlTag(block, field);
+    }
+    return obj;
+  });
+}
+
+async function handleShelterRequest(req, res) {
+  const shelterApiKey = process.env.SAFEMAP_API_KEY;
+  if (!shelterApiKey) {
+    res.status(500).json({ error: 'SAFEMAP_API_KEY 환경변수가 설정되지 않았습니다.' });
+    return;
+  }
+
+  const allItems = [];
+  let pageNo = 1;
+  const numOfRows = 100;
+
+  try {
+    while (true) {
+      const url = new URL(SHELTER_URL);
+      url.searchParams.set('serviceKey', shelterApiKey);
+      url.searchParams.set('pageNo', String(pageNo));
+      url.searchParams.set('numOfRows', String(numOfRows));
+      url.searchParams.set('returnType', 'xml');
+
+      const response = await fetchWithRetry(url.toString(), {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                        + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+      }, 2);
+
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '');
+        throw new Error(`safemap.go.kr HTTP ${response.status} | ${bodyText.slice(0, 200)}`);
+      }
+
+      const xmlText = await response.text();
+      const pageItems = parseShelterXmlItems(xmlText);
+
+      if (pageItems.length === 0) {
+        // 첫 페이지부터 0건이면 진짜 오류일 가능성이 높으니, 원인 파악에 쓸 수 있도록
+        // resultCode/resultMsg와 응답 앞부분을 로그로 남겨둔다.
+        if (pageNo === 1) {
+          const resultCode = extractXmlTag(xmlText, 'resultCode');
+          const resultMsg = extractXmlTag(xmlText, 'resultMsg');
+          console.error(
+            `safemap.go.kr 무더위쉼터 응답에 item이 없음 (resultCode=${resultCode || '?'}, `
+            + `resultMsg=${resultMsg || '?'}) | 응답 앞부분: ${xmlText.slice(0, 300)}`
+          );
+        }
+        break;
+      }
+
+      allItems.push(...pageItems);
+
+      const totalCount = Number(extractXmlTag(xmlText, 'totalCount') || 0);
+      if (pageNo * numOfRows >= totalCount) {
+        break;
+      }
+      pageNo += 1;
+    }
+
+    res.status(200).json({ items: allItems, totalCount: allItems.length });
+  } catch (err) {
+    const causeDetail = err && err.cause
+      ? ` | cause: ${err.cause.code || err.cause.message || String(err.cause)}`
+      : '';
+    const message = String(err && err.message ? err.message : err) + causeDetail;
+    console.error(`festivals.js 오류 (mode=shelter, pageNo=${pageNo}):`, message);
+    res.status(502).json({ error: message });
+  }
+}
+
 export default async function handler(req, res) {
+  const mode = req.query.mode === 'nature'
+    ? 'nature'
+    : (req.query.mode === 'shelter' ? 'shelter' : 'festival');
+
+  if (mode === 'shelter') {
+    return handleShelterRequest(req, res);
+  }
+
   const apiKey = process.env.TOUR_API_KEY;
   if (!apiKey) {
     res.status(500).json({ error: 'TOUR_API_KEY 환경변수가 설정되지 않았습니다.' });
     return;
   }
-
-  const mode = req.query.mode === 'nature' ? 'nature' : 'festival';
 
   const allItems = [];
   let pageNo = 1;
