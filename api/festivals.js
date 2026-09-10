@@ -56,9 +56,10 @@ export default async function handler(req, res) {
       url.searchParams.set('serviceKey', apiKey);
       url.searchParams.set('numOfRows', String(numOfRows));
       url.searchParams.set('pageNo', String(pageNo));
-      url.searchParams.set('type', 'json');
       url.searchParams.set('_type', 'json');
-      if (mode !== 'shelter') {
+      if (mode === 'shelter') {
+        url.searchParams.set('type', 'json');
+      } else {
         url.searchParams.set('MobileOS', 'ETC');
         url.searchParams.set('MobileApp', 'hohoplay');
         url.searchParams.set('arrange', 'A');
