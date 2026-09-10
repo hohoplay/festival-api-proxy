@@ -4,9 +4,12 @@
 //
 // ?mode=nature 를 붙이면 축제(searchFestival2) 대신 자연관광지(areaBasedList2 +
 // 자연관광지 카테고리)를 조회한다 — 수목원·공원·자연휴양림 지도용으로 추가됨.
+// ?mode=shelter 를 붙이면 행정안전부 전국무더위쉼터표준데이터를 조회한다.
+// (같은 공공데이터포털 계정의 서비스키를 그대로 재사용— 별도 키 발급 불필요)
 
 const FESTIVAL_URL = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
 const AREA_LIST_URL = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+const SHELTER_URL = 'https://apis.data.go.kr/1741000/HeatWaveShelter3/getHeatWaveShelterList3';
 
 function formatDate(d) {
   const y = d.getFullYear();
@@ -39,29 +42,34 @@ export default async function handler(req, res) {
     return;
   }
 
-  const mode = req.query.mode === 'nature' ? 'nature' : 'festival';
+  const modeParam = req.query.mode;
+  const mode = modeParam === 'nature' ? 'nature' : (modeParam === 'shelter' ? 'shelter' : 'festival');
 
   const allItems = [];
   let pageNo = 1;
-  const numOfRows = mode === 'nature' ? 100 : 200;
+  const numOfRows = mode === 'festival' ? 200 : 100;
 
   try {
     while (true) {
-      const url = new URL(mode === 'nature' ? AREA_LIST_URL : FESTIVAL_URL);
+      const baseUrl = mode === 'nature' ? AREA_LIST_URL : (mode === 'shelter' ? SHELTER_URL : FESTIVAL_URL);
+      const url = new URL(baseUrl);
       url.searchParams.set('serviceKey', apiKey);
       url.searchParams.set('numOfRows', String(numOfRows));
       url.searchParams.set('pageNo', String(pageNo));
-      url.searchParams.set('MobileOS', 'ETC');
-      url.searchParams.set('MobileApp', 'hohoplay');
+      url.searchParams.set('type', 'json');
       url.searchParams.set('_type', 'json');
-      url.searchParams.set('arrange', 'A');
+      if (mode !== 'shelter') {
+        url.searchParams.set('MobileOS', 'ETC');
+        url.searchParams.set('MobileApp', 'hohoplay');
+        url.searchParams.set('arrange', 'A');
+      }
 
       if (mode === 'nature') {
         // 자연관광지: 국립/도립/군립공원, 자연휴양림, 수목원
         url.searchParams.set('contentTypeId', '12');
         url.searchParams.set('cat1', 'A01');
         url.searchParams.set('cat2', 'A0101');
-      } else {
+      } else if (mode === 'festival') {
         let eventStartDate = req.query.from;
         if (!eventStartDate) {
           const from = new Date();
@@ -70,6 +78,7 @@ export default async function handler(req, res) {
         }
         url.searchParams.set('eventStartDate', eventStartDate);
       }
+      // mode === 'shelter'는 추가 파라미터 없이 전국 전체를 페이지 단위로 조회
 
       const response = await fetchWithRetry(url.toString(), {
         headers: {
