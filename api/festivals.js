@@ -81,6 +81,12 @@ function parseShelterXmlItems(xmlText) {
   });
 }
 
+// [FIX] 전국 무더위쉼터가 9만3천여 건(2026년 기준)이나 되어, 이 함수 안에서 전체
+// 페이지를 끝까지 다 도는 방식으로는 Vercel 함수 실행시간을 넘겨 타임아웃이 난다
+// (실제로 발생: GitHub Actions 쪽에서 30초 read timeout으로 3회 재시도 후 실패).
+// 그래서 페이지네이션 자체를 이 함수가 아니라 호출하는 쪽(파이썬)이 pageNo를 넘겨가며
+// 여러 번 나눠 부르는 방식으로 바꾸고, 여기서는 요청받은 딱 한 페이지만 처리해서
+// 바로 돌려준다 — 왕복 하나하나는 항상 짧게 끝나므로 타임아웃 위험이 사라진다.
 async function handleShelterRequest(req, res) {
   const shelterApiKey = process.env.SAFEMAP_API_KEY;
   if (!shelterApiKey) {
@@ -88,57 +94,50 @@ async function handleShelterRequest(req, res) {
     return;
   }
 
-  const allItems = [];
-  let pageNo = 1;
-  const numOfRows = 100;
+  const pageNoRaw = parseInt(req.query.pageNo, 10);
+  const pageNo = Number.isFinite(pageNoRaw) && pageNoRaw > 0 ? pageNoRaw : 1;
+  const numOfRowsRaw = parseInt(req.query.numOfRows, 10);
+  // safemap.go.kr 쪽의 실제 상한을 문서에서 확인 못 했으니, 과도한 값으로 요청해서
+  // 오히려 응답이 느려지는 일이 없도록 방어적으로 1000건까지만 허용한다.
+  const numOfRows = Number.isFinite(numOfRowsRaw) && numOfRowsRaw > 0
+    ? Math.min(numOfRowsRaw, 1000)
+    : 100;
 
   try {
-    while (true) {
-      const url = new URL(SHELTER_URL);
-      url.searchParams.set('serviceKey', shelterApiKey);
-      url.searchParams.set('pageNo', String(pageNo));
-      url.searchParams.set('numOfRows', String(numOfRows));
-      url.searchParams.set('returnType', 'xml');
+    const url = new URL(SHELTER_URL);
+    url.searchParams.set('serviceKey', shelterApiKey);
+    url.searchParams.set('pageNo', String(pageNo));
+    url.searchParams.set('numOfRows', String(numOfRows));
+    url.searchParams.set('returnType', 'xml');
 
-      const response = await fetchWithRetry(url.toString(), {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                        + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        }
-      }, 2);
-
-      if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        throw new Error(`safemap.go.kr HTTP ${response.status} | ${bodyText.slice(0, 200)}`);
+    const response = await fetchWithRetry(url.toString(), {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      + '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
       }
+    }, 2);
 
-      const xmlText = await response.text();
-      const pageItems = parseShelterXmlItems(xmlText);
-
-      if (pageItems.length === 0) {
-        // 첫 페이지부터 0건이면 진짜 오류일 가능성이 높으니, 원인 파악에 쓸 수 있도록
-        // resultCode/resultMsg와 응답 앞부분을 로그로 남겨둔다.
-        if (pageNo === 1) {
-          const resultCode = extractXmlTag(xmlText, 'resultCode');
-          const resultMsg = extractXmlTag(xmlText, 'resultMsg');
-          console.error(
-            `safemap.go.kr 무더위쉼터 응답에 item이 없음 (resultCode=${resultCode || '?'}, `
-            + `resultMsg=${resultMsg || '?'}) | 응답 앞부분: ${xmlText.slice(0, 300)}`
-          );
-        }
-        break;
-      }
-
-      allItems.push(...pageItems);
-
-      const totalCount = Number(extractXmlTag(xmlText, 'totalCount') || 0);
-      if (pageNo * numOfRows >= totalCount) {
-        break;
-      }
-      pageNo += 1;
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      throw new Error(`safemap.go.kr HTTP ${response.status} | ${bodyText.slice(0, 200)}`);
     }
 
-    res.status(200).json({ items: allItems, totalCount: allItems.length });
+    const xmlText = await response.text();
+    const items = parseShelterXmlItems(xmlText);
+    const totalCount = Number(extractXmlTag(xmlText, 'totalCount') || 0);
+
+    if (items.length === 0 && pageNo === 1) {
+      // 첫 페이지부터 0건이면 진짜 오류일 가능성이 높으니, 원인 파악에 쓸 수 있도록
+      // resultCode/resultMsg와 응답 앞부분을 로그로 남겨둔다.
+      const resultCode = extractXmlTag(xmlText, 'resultCode');
+      const resultMsg = extractXmlTag(xmlText, 'resultMsg');
+      console.error(
+        `safemap.go.kr 무더위쉼터 응답에 item이 없음 (resultCode=${resultCode || '?'}, `
+        + `resultMsg=${resultMsg || '?'}) | 응답 앞부분: ${xmlText.slice(0, 300)}`
+      );
+    }
+
+    res.status(200).json({ items, totalCount, pageNo, numOfRows });
   } catch (err) {
     const causeDetail = err && err.cause
       ? ` | cause: ${err.cause.code || err.cause.message || String(err.cause)}`
@@ -148,6 +147,7 @@ async function handleShelterRequest(req, res) {
     res.status(502).json({ error: message });
   }
 }
+
 
 export default async function handler(req, res) {
   const mode = req.query.mode === 'nature'
