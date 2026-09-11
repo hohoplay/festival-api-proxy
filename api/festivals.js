@@ -2,8 +2,9 @@
 // GitHub Actions(해외 서버)가 apis.data.go.kr에 직접 접속하면 차단당하는 문제를
 // 우회하기 위해, 한국 위치인 이 함수가 대신 호출하고 결과만 돌려준다.
 //
-// ?mode=nature 를 붙이면 축제(searchFestival2) 대신 자연관광지(areaBasedList2 +
-// 자연관광지 카테고리)를 조회한다 — 수목원·공원·자연휴양림 지도용으로 추가됨.
+// ?mode=nature / camping / watersports 를 붙이면 축제(searchFestival2) 대신
+// areaBasedList2 + 아래 카테고리 코드로 상시 개방 장소를 조회한다.
+// (nature: 수목원·공원·자연휴양림 / camping: 캠핑장·오토캠핑장 / watersports: 수상레포츠)
 //
 // ?mode=shelter 를 붙이면 TourAPI가 아니라 별도 기관(행정안전부 생활안전지도,
 // safemap.go.kr)의 무더위쉼터 API(IF_0001)를 호출한다. TOUR_API_KEY와는
@@ -11,6 +12,15 @@
 
 const FESTIVAL_URL = 'https://apis.data.go.kr/B551011/KorService2/searchFestival2';
 const AREA_LIST_URL = 'https://apis.data.go.kr/B551011/KorService2/areaBasedList2';
+
+// areaBasedList2로 조회하는 "상시 개방" 카테고리들. cat3까지 지정한 건 같은 cat2
+// 안에 있는 다른 성격의 시설(캠핑의 경우 골프연습장·스키장·서바이벌게임장 등)이
+// 섞여 들어오지 않도록 좁혀둔 것 — 새 카테고리를 추가할 땐 여기에 한 줄만 더하면 됨.
+const AREA_LIST_MODES = {
+  nature: { contentTypeId: '12', cat1: 'A01', cat2: 'A0101' },                     // 국립/도립/군립공원, 자연휴양림, 수목원
+  camping: { contentTypeId: '28', cat1: 'A03', cat2: 'A0302', cat3: 'A03021700' }, // 야영장·오토캠핑장
+  watersports: { contentTypeId: '28', cat1: 'A03', cat2: 'A0301' }                 // 수상레포츠(수상스키·래프팅·보트 등, cat3 세분류가 다양해 cat2까지만 지정)
+};
 
 // safemap.go.kr(생활안전지도) 무더위쉼터 오픈API. 공식 샘플 코드가 http(80포트)로
 // 호출하고 있고 이 서버가 별도 인증서를 요구할 가능성이 있어 그대로 http를 따른다.
@@ -150,9 +160,10 @@ async function handleShelterRequest(req, res) {
 
 
 export default async function handler(req, res) {
-  const mode = req.query.mode === 'nature'
-    ? 'nature'
-    : (req.query.mode === 'shelter' ? 'shelter' : 'festival');
+  const modeParam = req.query.mode;
+  const mode = modeParam === 'shelter'
+    ? 'shelter'
+    : (AREA_LIST_MODES[modeParam] ? modeParam : 'festival');
 
   if (mode === 'shelter') {
     return handleShelterRequest(req, res);
@@ -164,13 +175,14 @@ export default async function handler(req, res) {
     return;
   }
 
+  const areaListCategory = AREA_LIST_MODES[mode]; // festival이면 undefined
   const allItems = [];
   let pageNo = 1;
-  const numOfRows = mode === 'nature' ? 100 : 200;
+  const numOfRows = areaListCategory ? 100 : 200;
 
   try {
     while (true) {
-      const url = new URL(mode === 'nature' ? AREA_LIST_URL : FESTIVAL_URL);
+      const url = new URL(areaListCategory ? AREA_LIST_URL : FESTIVAL_URL);
       url.searchParams.set('serviceKey', apiKey);
       url.searchParams.set('numOfRows', String(numOfRows));
       url.searchParams.set('pageNo', String(pageNo));
@@ -179,11 +191,13 @@ export default async function handler(req, res) {
       url.searchParams.set('_type', 'json');
       url.searchParams.set('arrange', 'A');
 
-      if (mode === 'nature') {
-        // 자연관광지: 국립/도립/군립공원, 자연휴양림, 수목원
-        url.searchParams.set('contentTypeId', '12');
-        url.searchParams.set('cat1', 'A01');
-        url.searchParams.set('cat2', 'A0101');
+      if (areaListCategory) {
+        url.searchParams.set('contentTypeId', areaListCategory.contentTypeId);
+        url.searchParams.set('cat1', areaListCategory.cat1);
+        url.searchParams.set('cat2', areaListCategory.cat2);
+        if (areaListCategory.cat3) {
+          url.searchParams.set('cat3', areaListCategory.cat3);
+        }
       } else {
         let eventStartDate = req.query.from;
         if (!eventStartDate) {
