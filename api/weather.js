@@ -136,6 +136,12 @@ module.exports = async function handler(req, res) {
   const { nx, ny } = dfsXyConv(latNum, lngNum);
   const { base_date, base_time } = getBaseDateTime();
 
+  // "오늘 비 예보"라고 표시하는 배너이므로, 기상청이 주는 2~3일치 예보 전체가 아니라
+  // 오늘(KST 기준 현재 날짜) 남은 시간대만 봐야 한다. 안 그러면 내일/모레 비가 와도
+  // 오늘 비가 오는 것처럼 떠버린다.
+  const nowKst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const todayDateStr = nowKst.toISOString().slice(0, 10).replace(/-/g, '');
+
   // serviceKey는 공공데이터포털이 준 "Encoding" 값을 그대로 붙인다 — 이미 URL 인코딩된
   // 문자열이므로 encodeURIComponent로 다시 감싸면 이중 인코딩되어 인증에 실패한다.
   const url =
@@ -166,17 +172,24 @@ module.exports = async function handler(req, res) {
 
     const items = (data.response.body && data.response.body.items && data.response.body.items.item) || [];
     const popItems = items.filter((it) => it.category === 'POP');
+    // 오늘 남은 시간대만 "오늘 비 예보" 판단에 쓴다. forecast 응답 자체는 참고용으로
+    // 전체(오늘+내일+모레)를 그대로 돌려준다 — 프런트에서 필요하면 날짜별로 더 쓸 수 있게.
+    const todayPopItems = popItems.filter((it) => it.fcstDate === todayDateStr);
 
     let maxPop = 0;
     let maxPopTime = null;
-    const forecast = popItems.map((it) => {
+    todayPopItems.forEach((it) => {
       const pop = parseInt(it.fcstValue, 10);
       if (pop > maxPop) {
         maxPop = pop;
         maxPopTime = `${it.fcstDate} ${it.fcstTime}`;
       }
-      return { date: it.fcstDate, time: it.fcstTime, pop };
     });
+    const forecast = popItems.map((it) => ({
+      date: it.fcstDate,
+      time: it.fcstTime,
+      pop: parseInt(it.fcstValue, 10),
+    }));
 
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1800');
     res.status(200).json({
